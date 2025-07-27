@@ -2,36 +2,31 @@ package handlers
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"log/slog"
-	"math"
 	"net/http"
 	"time"
 
-	"github.com/lucashmsilva/rinha-2025-api-go/internal/infra/database"
+	"github.com/lucashmsilva/rinha-2025-api-go/internal/entities"
+	"github.com/lucashmsilva/rinha-2025-api-go/internal/repositories"
 	"github.com/lucashmsilva/rinha-2025-api-go/internal/service"
+	"github.com/lucashmsilva/rinha-2025-api-go/internal/workers"
 )
 
 type PaymentCreateHandler struct {
-	db          *database.Db
+	paymentRep  *repositories.PaymentRepository
 	procService *service.ProcessorService
+	dlq         *workers.DLQ
 }
 
-type PaymentCreateInput struct {
-	CorrelationId string    `json:"correlationId"`
-	Amount        float64   `json:"amount"`
-	RequestedAt   time.Time `json:"requestedAt"`
-}
-
-func NewPaymentCreateHandler(db *database.Db, procService *service.ProcessorService) *PaymentCreateHandler {
-	return &PaymentCreateHandler{db, procService}
+func NewPaymentCreateHandler(paymentRep *repositories.PaymentRepository, procService *service.ProcessorService, dlq *workers.DLQ) *PaymentCreateHandler {
+	return &PaymentCreateHandler{paymentRep, procService, dlq}
 }
 
 func (p *PaymentCreateHandler) Handle() http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var processorUsed string = service.ProcessorDefault
-		var payment PaymentCreateInput
+		var payment entities.Payment
 		payment.RequestedAt = time.Now().UTC()
 
 		err := json.NewDecoder(r.Body).Decode(&payment)
@@ -45,37 +40,40 @@ func (p *PaymentCreateHandler) Handle() http.HandlerFunc {
 
 		paymentJSONBytes, _ := json.Marshal(&payment)
 
-		// logger.Info("payment received:",
-		// 	slog.Group("payment",
-		// 		"correlationId", payment.CorrelationId,
-		// 		"amount", payment.Amount,
-		// 		"requestedAt", payment.RequestedAt,
-		// 	),
-		// )
+		// rep, err := p.paymentRep.Start()
+		// if err != nil {
+		// 	w.WriteHeader(http.StatusInternalServerError)
+		// 	return
+		// }
 
-		_, resStatus, err := p.procService.MakeRequestDefault(http.MethodPost, "/payments", bytes.NewReader(paymentJSONBytes))
+		// _, err = rep.Create(&payment, processorUsed)
+		// if err != nil {
+		// 	logger.Error("Error inserting to database:", "err", err)
+		// 	w.WriteHeader(http.StatusInternalServerError)
+		// 	return
+		// }
+
+		_, resStatus, err := p.procService.MakeRequestDefault(http.MethodPost, "/payments", bytes.NewReader(paymentJSONBytes), 0)
 		if err != nil || resStatus > 399 {
-			// logger.Error("Error calling default processor, retrying with fallback", "err", err, "resStatus", resStatus)
-
-			processorUsed = service.ProcessorFallback
-			_, resStatus, err = p.procService.MakeRequestFallback(http.MethodPost, "/payments", bytes.NewReader(paymentJSONBytes))
-			if err != nil || resStatus > 399 {
-				logger.Error("Error calling fallback processor", "err", err, "resStatus", resStatus)
-				// w.WriteHeader(http.StatusUnprocessableEntity)
-				// return
-				processorUsed = ""
+			logger.Error("Error calling default processor, sending to DQL", "err", err, "resStatus", resStatus)
+			failureReason := workers.FailureProcError
+			if resStatus >= 399 {
+				failureReason = workers.FailureProcTimeout
 			}
+
+			p.dlq.PushToQueue(&entities.PaymentRetry{
+				P:                 &payment,
+				FailureCount:      1,
+				LastProcessorUsed: service.ProcessorDefault,
+				LastFailureReason: failureReason,
+			})
+
+			// rep.Cancel()
 		}
 
-		_, err = p.db.Conn.Exec(context.TODO(),
-			"INSERT INTO payments (correlation_id, amount, processor_used, requested_at) VALUES($1, $2, $3, $4)",
-			payment.CorrelationId, int(math.Round(payment.Amount*100)), processorUsed, payment.RequestedAt.Format("2006-01-02T15:04:05.000Z"),
-		)
-		if err != nil {
-			logger.Error("Error inserting to database:", "err", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
+		p.paymentRep.Create(&payment, processorUsed)
+
+		// rep.Finish()
 
 		w.Header().Add("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)

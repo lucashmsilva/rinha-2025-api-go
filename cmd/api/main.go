@@ -12,6 +12,7 @@ import (
 	"github.com/lucashmsilva/rinha-2025-api-go/internal/handlers"
 	"github.com/lucashmsilva/rinha-2025-api-go/internal/infra/config"
 	"github.com/lucashmsilva/rinha-2025-api-go/internal/infra/database"
+	"github.com/lucashmsilva/rinha-2025-api-go/internal/repositories"
 	"github.com/lucashmsilva/rinha-2025-api-go/internal/service"
 	"github.com/lucashmsilva/rinha-2025-api-go/internal/workers"
 )
@@ -19,17 +20,21 @@ import (
 func main() {
 	cfg := config.LoadConfig()
 	db := database.LoadConnections(cfg.DbConnCfg)
+	paymentRep := repositories.NewPaymentRepository(db)
 	procService := service.NewProcessorService(cfg)
-	healthChecker := workers.NewHealthChecker(db, procService)
+	healthCheckerWorker := workers.NewHealthChecker(db, procService)
+	dlq := workers.NewDQL(healthCheckerWorker, procService, paymentRep)
 	mux := http.NewServeMux()
 
 	slog.SetLogLoggerLevel(slog.Level(cfg.LogLevel))
 
+	dlq.StartDQLWorker()
+
 	if cfg.StartHealthChecker {
-		healthChecker.StartHealthChecker()
+		healthCheckerWorker.StartHealthChecker()
 	}
 
-	mux.Handle("POST /payments", handlers.NewPaymentCreateHandler(db, procService).Handle())
+	mux.Handle("POST /payments", handlers.NewPaymentCreateHandler(paymentRep, procService, dlq).Handle())
 	mux.Handle("GET /payments-summary", handlers.NewPaymentGetSummaryHandler(db).Handle())
 	mux.Handle("POST /purge-payments", handlers.NewPaymentsPurgeHandler(db, procService).Handle())
 

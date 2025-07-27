@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	healthCheckInterval = 5500 * time.Millisecond
+	HealthCheckInterval = 5500 * time.Millisecond
 )
 
 type HealthChecker struct {
@@ -41,6 +41,7 @@ func (h *Health) String() string {
 }
 
 func NewHealthChecker(db *database.Db, procService *service.ProcessorService) *HealthChecker {
+
 	return &HealthChecker{
 		procService: procService,
 		db:          db,
@@ -48,7 +49,7 @@ func NewHealthChecker(db *database.Db, procService *service.ProcessorService) *H
 }
 
 func (h *HealthChecker) StartHealthChecker() {
-	ticker := time.NewTicker(healthCheckInterval)
+	ticker := time.NewTicker(HealthCheckInterval)
 	go func() {
 		for range ticker.C {
 			defaultHealth, fallbackHealth := h.checkProcessors()
@@ -62,7 +63,7 @@ func (h *HealthChecker) StartHealthChecker() {
 }
 
 func (h *HealthChecker) GetProcessorsHealth() (*Health, *Health) {
-	return h.getHealthFromStore()
+	return h.buildDefaultProcessorHealth(), h.buildFallbackProcessorHealth()
 }
 
 func (h *HealthChecker) checkProcessors() (*Health, *Health) {
@@ -100,7 +101,7 @@ func (h *HealthChecker) checkProcessors() (*Health, *Health) {
 func (h *HealthChecker) callHealthCheckEndpoint(processor string) (*Health, error) {
 	var healthCheckRes Health
 
-	resBody, resStatus, err := h.procService.MakeRequest(processor, http.MethodGet, "/payments/service-health", nil)
+	resBody, resStatus, err := h.procService.MakeRequest(processor, http.MethodGet, "/payments/service-health", nil, 0)
 	if err != nil || resStatus > 399 {
 		slog.Error("Error health checking processor", "err", err, "resStatus", resStatus)
 		return nil, err

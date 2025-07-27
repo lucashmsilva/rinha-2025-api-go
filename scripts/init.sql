@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS payments (
     CONSTRAINT payments_correlation_id_key UNIQUE (correlation_id)
 );
 
+CREATE INDEX requested_at_idx ON payments (requested_at);
+
 CREATE TABLE IF NOT EXISTS processor_health (
     processor VARCHAR(8) NOT NULL,
     is_falling BOOLEAN NULL DEFAULT NULL,

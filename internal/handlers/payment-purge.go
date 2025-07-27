@@ -19,7 +19,7 @@ func NewPaymentsPurgeHandler(db *database.Db, procService *service.ProcessorServ
 
 func (p *PaymentPurgeHandler) Handle() http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, resStatus, err := p.procService.MakeRequestDefault(http.MethodPost, "/admin/purge-payments", nil)
+		_, resStatus, err := p.procService.MakeRequestDefault(http.MethodPost, "/admin/purge-payments", nil, 0)
 		if err != nil || resStatus > 399 {
 			slog.Error("Error calling default processor payment purge", "err", err, "resStatus", resStatus)
 
@@ -27,7 +27,7 @@ func (p *PaymentPurgeHandler) Handle() http.HandlerFunc {
 			return
 		}
 
-		_, resStatus, err = p.procService.MakeRequestFallback(http.MethodPost, "/admin/purge-payments", nil)
+		_, resStatus, err = p.procService.MakeRequestFallback(http.MethodPost, "/admin/purge-payments", nil, 0)
 		if err != nil || resStatus > 399 {
 			slog.Error("Error calling default processor payment purge", "err", err, "resStatus", resStatus)
 

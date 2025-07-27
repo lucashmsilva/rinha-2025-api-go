@@ -65,15 +65,15 @@ func (p *ProcessorService) SetFallbackTimeout(t int) {
 	p.fallbackTimeout = time.Duration(t) * time.Millisecond
 }
 
-func (p *ProcessorService) MakeRequestDefault(method, path string, body io.Reader) (io.ReadCloser, int, error) {
-	return p.MakeRequest(ProcessorDefault, method, path, body)
+func (p *ProcessorService) MakeRequestDefault(method, path string, body io.Reader, timeout int) (io.ReadCloser, int, error) {
+	return p.MakeRequest(ProcessorDefault, method, path, body, timeout)
 }
 
-func (p *ProcessorService) MakeRequestFallback(method, path string, body io.Reader) (io.ReadCloser, int, error) {
-	return p.MakeRequest(ProcessorFallback, method, path, body)
+func (p *ProcessorService) MakeRequestFallback(method, path string, body io.Reader, timeout int) (io.ReadCloser, int, error) {
+	return p.MakeRequest(ProcessorFallback, method, path, body, timeout)
 }
 
-func (p *ProcessorService) MakeRequest(processor, method, path string, body io.Reader) (io.ReadCloser, int, error) {
+func (p *ProcessorService) MakeRequest(processor, method, path string, body io.Reader, overrideTimeout int) (io.ReadCloser, int, error) {
 	var reqPath string
 	var timeout time.Duration
 
@@ -86,6 +86,10 @@ func (p *ProcessorService) MakeRequest(processor, method, path string, body io.R
 		timeout = p.fallbackTimeout
 	default:
 		return nil, 0, errors.New("invalid processor")
+	}
+
+	if overrideTimeout > 0 {
+		timeout = time.Duration(overrideTimeout) * time.Millisecond
 	}
 
 	p.mu.RLock()
