@@ -3,37 +3,37 @@ package database
 import (
 	"context"
 	"fmt"
-	"os"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/lucashmsilva/rinha-2025-api-go/internal/infra/config"
+	"github.com/redis/go-redis/v9"
 )
 
 type Db struct {
-	Conn *pgxpool.Pool
+	Conn *redis.Client
+	Ctx  context.Context
 }
 
 func LoadConnections(dbCfg *config.DbConnCfg) *Db {
-	// postgres://username:password@localhost:5432/database_name?option_name=value
-	connectionStringFmt := "postgres://%s:%s@%s:%d/%s?pool_max_conn_lifetime=%s&pool_min_idle_conns=%d&pool_max_conns=%d&pool_min_conns=%d"
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     fmt.Sprintf("%s:%d", dbCfg.Host, dbCfg.Port),
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
 
-	dataSource := fmt.Sprintf(connectionStringFmt,
-		dbCfg.Username,
-		dbCfg.Password,
-		dbCfg.Host,
-		dbCfg.Port,
-		dbCfg.Database,
-		dbCfg.PoolMaxLifetime.String(),
-		dbCfg.PoolMinIdleConns,
-		dbCfg.PoolMaxOpenConns,
-		dbCfg.PoolMinOpenConns,
-	)
+	db := &Db{rdb, context.Background()}
+	db.ResetStorage()
 
-	db, err := pgxpool.New(context.Background(), dataSource)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Unable to create connection pool: %v\n", err)
-		os.Exit(1)
-	}
+	return db
+}
 
-	return &Db{db}
+func (db *Db) ResetStorage() {
+	// summary accumulators
+	db.Conn.Set(db.Ctx, "summary:default:totalRequests", 0, 0)
+	db.Conn.Set(db.Ctx, "summary:default:totalAmount", 0, 0)
+	db.Conn.Set(db.Ctx, "summary:fallback:totalRequests", 0, 0)
+	db.Conn.Set(db.Ctx, "summary:fallback:totalAmount", 0, 0)
+
+	// healthcheck cache
+	db.Conn.Set(db.Ctx, "health:default:failing", false, 0)
+	db.Conn.Set(db.Ctx, "health:fallback:failing", false, 0)
 }

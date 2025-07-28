@@ -1,59 +1,68 @@
 package repositories
 
 import (
-	"context"
-	"math"
+	"fmt"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lucashmsilva/rinha-2025-api-go/internal/entities"
 	"github.com/lucashmsilva/rinha-2025-api-go/internal/infra/database"
 )
 
 type PaymentRepository struct {
 	db *database.Db
-	tx pgx.Tx
 }
 
 func NewPaymentRepository(db *database.Db) *PaymentRepository {
-	return &PaymentRepository{db, nil}
+	return &PaymentRepository{db}
 }
 
-func (r *PaymentRepository) Start() (*PaymentRepository, error) {
-	tx, err := r.db.Conn.Begin(context.TODO())
+func (r *PaymentRepository) SavePayment(p *entities.Payment, processorUsed string) error {
+	requestsKey := fmt.Sprintf("summary:%s:totalRequests", processorUsed)
+	amountKey := fmt.Sprintf("summary:%s:totalAmount", processorUsed)
+
+	err := r.db.Conn.Incr(r.db.Ctx, requestsKey).Err()
+	if err != nil {
+		return err
+	}
+
+	err = r.db.Conn.IncrByFloat(r.db.Ctx, amountKey, p.Amount).Err()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *PaymentRepository) GetSummary() (*entities.PaymentSummary, error) {
+	defaultTotalRequests, err := r.db.Conn.Get(r.db.Ctx, "summary:default:totalRequests").Int()
 	if err != nil {
 		return nil, err
 	}
 
-	return &PaymentRepository{r.db, tx}, nil
-}
-
-func (r *PaymentRepository) Finish() {
-	if r.tx == nil {
-		return
+	defaultTotalAmount, err := r.db.Conn.Get(r.db.Ctx, "summary:default:totalAmount").Float64()
+	if err != nil {
+		return nil, err
 	}
 
-	r.tx.Commit(context.TODO())
-	r.tx = nil
-}
-
-func (r *PaymentRepository) Cancel() {
-	if r.tx == nil {
-		return
+	fallbackTotalRequests, err := r.db.Conn.Get(r.db.Ctx, "summary:fallback:totalRequests").Int()
+	if err != nil {
+		return nil, err
 	}
 
-	r.tx.Rollback(context.TODO())
-	r.tx = nil
-}
-
-func (r *PaymentRepository) Create(p *entities.Payment, processorUsed string) (pgconn.CommandTag, error) {
-	query := "INSERT INTO payments (correlation_id, amount, processor_used, requested_at) VALUES($1, $2, $3, $4)"
-	args := []any{p.CorrelationId, int(math.Round(p.Amount * 100)), processorUsed, p.RequestedAt.Format("2006-01-02T15:04:05.000Z")}
-
-	if r.tx != nil {
-		return r.tx.Exec(context.TODO(), query, args...)
-
+	fallbackTotalAmount, err := r.db.Conn.Get(r.db.Ctx, "summary:fallback:totalAmount").Float64()
+	if err != nil {
+		return nil, err
 	}
 
-	return r.db.Conn.Exec(context.TODO(), query, args)
+	summary := &entities.PaymentSummary{
+		Default: entities.Metrics{
+			TotalRequests: defaultTotalRequests,
+			TotalAmount:   defaultTotalAmount,
+		},
+		Fallback: entities.Metrics{
+			TotalRequests: fallbackTotalRequests,
+			TotalAmount:   fallbackTotalAmount,
+		},
+	}
+
+	return summary, nil
 }

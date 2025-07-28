@@ -71,7 +71,7 @@ func (p *PaymentCreateHandler) Handle() http.HandlerFunc {
 			// rep.Cancel()
 		}
 
-		p.paymentRep.Create(&payment, processorUsed)
+		p.paymentRep.SavePayment(&payment, processorUsed)
 
 		// rep.Finish()
 
