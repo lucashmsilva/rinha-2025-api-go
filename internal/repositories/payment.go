@@ -1,7 +1,10 @@
 package repositories
 
 import (
+	"bytes"
+	"encoding/gob"
 	"fmt"
+	"sync"
 
 	"github.com/lucashmsilva/rinha-2025-api-go/internal/entities"
 	"github.com/lucashmsilva/rinha-2025-api-go/internal/infra/database"
@@ -16,20 +19,51 @@ func NewPaymentRepository(db *database.Db) *PaymentRepository {
 }
 
 func (r *PaymentRepository) SavePayment(p *entities.Payment, processorUsed string) error {
-	requestsKey := fmt.Sprintf("summary:%s:totalRequests", processorUsed)
-	amountKey := fmt.Sprintf("summary:%s:totalAmount", processorUsed)
+	var b bytes.Buffer
 
-	err := r.db.Conn.Incr(r.db.Ctx, requestsKey).Err()
-	if err != nil {
+	if err := gob.NewEncoder(&b).Encode(p); err != nil {
 		return err
 	}
 
-	err = r.db.Conn.IncrByFloat(r.db.Ctx, amountKey, p.Amount).Err()
-	if err != nil {
-		return err
-	}
+	return r.db.Conn.HSet(r.db.Ctx, fmt.Sprintf("payments:%s", processorUsed), p.CorrelationId, b.Bytes(), 0).Err()
+}
 
-	return nil
+func (r *PaymentRepository) GetAllPayments() ([]*entities.Payment, []*entities.Payment, error) {
+	var defaultPayments, fallbackPayments []*entities.Payment
+	var wg sync.WaitGroup
+
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		defaultPaymentsMap := r.db.Conn.HGetAll(r.db.Ctx, "payments:default").Val()
+
+		for _, redisPayment := range defaultPaymentsMap {
+			var payment entities.Payment
+
+			b := bytes.NewReader([]byte(redisPayment))
+			gob.NewDecoder(b).Decode(&payment)
+
+			defaultPayments = append(defaultPayments, &payment)
+		}
+	}()
+
+	go func() {
+		fallbackPaymentsMap := r.db.Conn.HGetAll(r.db.Ctx, "payments:fallback").Val()
+
+		for _, redisPayment := range fallbackPaymentsMap {
+			var payment entities.Payment
+
+			b := bytes.NewReader([]byte(redisPayment))
+			gob.NewDecoder(b).Decode(&payment)
+
+			fallbackPayments = append(fallbackPayments, &payment)
+		}
+	}()
+
+	wg.Wait()
+
+	return defaultPayments, fallbackPayments, nil
 }
 
 func (r *PaymentRepository) GetSummary() (*entities.PaymentSummary, error) {
